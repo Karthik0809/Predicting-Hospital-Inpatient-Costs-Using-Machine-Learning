@@ -55,9 +55,8 @@ This project aims to predict the total cost incurred by hospital inpatients base
 - Incorporate more complex deep learning architectures
 - Use time-series features or temporal trends if available
 
-## Author
-**Karthik Mulugu**  
-[LinkedIn](https://www.linkedin.com/in/karthikmulugu/)
+## Author 
+[**Karthik Mulugu**](https://www.linkedin.com/in/karthikmulugu/)
 
 ## References
 - [SPARCS Dataset](https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De%20Identified/u4ud-w55t/about_data)  
