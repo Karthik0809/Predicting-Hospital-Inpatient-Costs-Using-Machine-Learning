@@ -1,4 +1,3 @@
-
 # Predicting Hospital Inpatient Costs Using Machine Learning
 
 ## Overview
@@ -63,3 +62,7 @@ This project aims to predict the total cost incurred by hospital inpatients base
 - [Gradient Boosting Guide](https://www.analyticsvidhya.com/blog/2021/09/gradient-boosting-algorithm-a-complete-guide-for-beginners/)  
 - [Random Forest Theory](https://towardsdatascience.com/the-mathematics-of-decision-trees-random-forest-and-feature-importance-in-scikit-learn-and-spark-f2861df67e3)  
 - [Scikit-learn Supervised Learning](https://scikit-learn.org/stable/supervised_learning.html)
+
+## License
+This project is licensed under the [MIT License](LICENSE).  
+© 2025 Karthik Mulugu
