@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  # ─── Model Training (one-shot service) ──────────────────────────────────────
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: python train.py --no-optuna
+    volumes:
+      - artifacts:/app/artifacts
+      - ./data:/app/data:ro
+    environment:
+      - ARTIFACTS_DIR=artifacts
+      - SAMPLE_SIZE=50000
+    profiles: ["train"]
+
+  # ─── FastAPI Prediction API ──────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - artifacts:/app/artifacts
+    environment:
+      - ARTIFACTS_DIR=artifacts
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    depends_on:
+      - mlflow
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── Streamlit Dashboard ─────────────────────────────────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - artifacts:/app/artifacts
+    environment:
+      - ARTIFACTS_DIR=artifacts
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ─── MLflow Experiment Tracking ───────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    command: >
+      mlflow server
+        --backend-store-uri sqlite:////mlflow/mlflow.db
+        --default-artifact-root /mlflow/artifacts
+        --host 0.0.0.0
+        --port 5000
+    restart: unless-stopped
+
+volumes:
+  artifacts:
+  mlflow_data:

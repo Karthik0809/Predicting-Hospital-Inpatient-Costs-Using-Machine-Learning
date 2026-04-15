@@ -1,0 +1,43 @@
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Dashboard
+streamlit>=1.40.0
+plotly>=5.24.0
+
+# Data
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.14.0
+
+# Machine Learning
+scikit-learn>=1.5.0
+xgboost>=2.1.0
+lightgbm>=4.5.0
+joblib>=1.4.0
+
+# Deep Learning (CPU wheel — small enough for Streamlit Cloud)
+torch>=2.5.0
+
+# Hyperparameter Tuning
+optuna>=4.0.0
+
+# Experiment Tracking
+mlflow>=2.18.0
+
+# Explainability
+shap>=0.46.0
+
+# Validation & Config
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.0
+
+# HTTP
+httpx>=0.27.0
+python-multipart>=0.0.12
+
+# Visualisation
+matplotlib>=3.9.0
+seaborn>=0.13.0
