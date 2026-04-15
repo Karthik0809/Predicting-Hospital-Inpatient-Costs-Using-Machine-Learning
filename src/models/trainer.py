@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import mlflow
 import numpy as np
 import optuna
 import pandas as pd
@@ -26,6 +25,14 @@ from src.data.preprocessor import (
 )
 from src.models.neural import NeuralNetRegressor
 from src.models.traditional import build_model, default_params, evaluate, optuna_space
+
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except Exception as exc:  # pragma: no cover - environment-dependent import safety
+    mlflow = None  # type: ignore[assignment]
+    MLFLOW_AVAILABLE = False
+    _MLFLOW_IMPORT_ERROR = exc
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -69,9 +76,16 @@ def train_all(use_optuna: bool = True) -> dict[str, dict[str, float]]:
     X_test  = preprocessor.transform(X_test_raw)
     save_pipeline(preprocessor, artifacts)
 
-    # 3. Setup MLflow
-    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-    mlflow.set_experiment(settings.mlflow_experiment_name)
+    # 3. Setup MLflow (optional in deployment environments where mlflow may be incompatible)
+    if MLFLOW_AVAILABLE:
+        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+        mlflow.set_experiment(settings.mlflow_experiment_name)
+    else:
+        logger.warning(
+            "MLflow is unavailable in this environment; continuing without experiment logging. "
+            "Import error: %s",
+            _MLFLOW_IMPORT_ERROR,
+        )
 
     all_metrics: dict[str, dict[str, float]] = {}
 
@@ -258,6 +272,8 @@ def _log_to_mlflow(
     metrics: dict[str, float],
     artifacts_dir: Path,
 ) -> None:
+    if not MLFLOW_AVAILABLE:
+        return
     with mlflow.start_run(run_name=name):
         mlflow.log_params({k: str(v) for k, v in params.items()})
         mlflow.log_metrics(metrics)

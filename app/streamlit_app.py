@@ -12,6 +12,7 @@ Tabs
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import sys
@@ -51,6 +52,7 @@ st.markdown(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 from src.data.loader import ALL_FEATURES, CATEGORICAL_FEATURES, NUMERICAL_FEATURES
+from src.config import settings
 
 SEVERITY_OPTS   = ["Minor", "Moderate", "Major", "Extreme"]
 MORTALITY_OPTS  = ["Minor", "Moderate", "Major", "Extreme"]
@@ -83,7 +85,7 @@ def _get_artifacts():
     if not artifacts_exist():
         train_all(use_optuna=False)
     model, name    = load_best_model()
-    preprocessor   = load_pipeline()
+    preprocessor   = load_pipeline(settings.artifacts_dir)
     metrics        = load_metrics()
     return model, name, preprocessor, metrics
 
@@ -807,13 +809,18 @@ with tab_ins:
     c5, c6 = st.columns(2)
     with c5:
         samp = df_s.sample(min(2_000, len(df_s)))
-        fig = px.scatter(
-            samp, x="Length of Stay", y="Total Costs",
+        scatter_kwargs = dict(
+            data_frame=samp,
+            x="Length of Stay",
+            y="Total Costs",
             color="APR Severity of Illness Description",
-            opacity=0.45, trendline="ols",
+            opacity=0.45,
             title="Length of Stay vs Total Cost",
             category_orders={"APR Severity of Illness Description": SEVERITY_OPTS},
         )
+        if importlib.util.find_spec("statsmodels") is not None:
+            scatter_kwargs["trendline"] = "ols"
+        fig = px.scatter(**scatter_kwargs)
         st.plotly_chart(fig, use_container_width=True)
     with c6:
         pay_avg = (
