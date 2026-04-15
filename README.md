@@ -5,6 +5,12 @@ Rebuilt with a modern ML stack, REST API, interactive dashboard, and full Docker
 
 ---
 
+## Live App
+
+- Streamlit: https://hospitalcostpred.streamlit.app/
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
