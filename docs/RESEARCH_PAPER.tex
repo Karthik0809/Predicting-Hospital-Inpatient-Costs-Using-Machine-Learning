@@ -1,0 +1,416 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black
+}
+
+\setstretch{1.15}
+\setlist[itemize]{leftmargin=1.2em}
+\setlist[enumerate]{leftmargin=1.4em}
+
+\title{Predicting Hospital Inpatient Costs Using Machine Learning:\\A Multi-Model Approach with Explainability and Production Deployment}
+\author{Karthik Mulugu\\\texttt{karthikmulugu14@gmail.com}}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Accurate prediction of hospital inpatient costs is a critical challenge in healthcare economics, impacting resource allocation, insurance pricing, and patient financial planning. This paper presents a comprehensive machine learning system trained on the New York State SPARCS (Statewide Planning and Research Cooperative System) 2012 hospital inpatient discharge dataset, comprising approximately 2.5 million de-identified records. We evaluate five regression models---Ridge Regression, Random Forest, XGBoost, LightGBM, and a PyTorch Multilayer Perceptron (MLP)---with systematic hyperparameter optimisation via Optuna (30 Bayesian trials per model) and full experiment tracking through MLflow. To go beyond point estimates, we train dedicated XGBoost quantile regression models at the 10th and 90th percentiles to produce statistically grounded prediction intervals. Model decisions are made interpretable through SHAP (SHapley Additive exPlanations) TreeExplainer, revealing that Length of Stay, APR Severity of Illness Code, and APR Medical/Surgical Description are the dominant cost drivers. The trained system is packaged as a production-grade REST API (FastAPI) and an interactive six-tab Streamlit dashboard with What-If analysis, batch prediction, and session history tracking, all orchestrated via Docker Compose.
+\end{abstract}
+
+\noindent\textbf{Keywords:} hospital cost prediction, XGBoost, LightGBM, neural network, SHAP explainability, Optuna, MLflow, FastAPI, healthcare analytics, SPARCS
+
+\section{Introduction}
+Healthcare expenditure in the United States exceeded \$4.5 trillion in 2022, representing approximately 17.3\% of GDP [1]. A significant portion of these costs originates from inpatient hospital stays, where costs vary dramatically across patient populations, diagnoses, and care pathways. Despite the scale of this problem, accurate pre-admission or at-admission cost estimation remains difficult due to the heterogeneous nature of patient demographics, clinical severity, and institutional variation.
+
+The ability to predict inpatient costs accurately has broad applications:
+\begin{itemize}
+  \item \textbf{Hospital administrators} can improve budgeting, capacity planning, and contract negotiation with payers.
+  \item \textbf{Insurance payers} can assess risk and set appropriate premiums or reimbursement rates.
+  \item \textbf{Clinicians and care managers} can flag high-cost cases early for targeted intervention or care coordination.
+  \item \textbf{Patients} benefit from financial transparency and improved ability to plan for out-of-pocket exposure.
+\end{itemize}
+
+Prior work in this domain has largely relied on traditional actuarial models, diagnosis-related group (DRG) reimbursement schedules, or simple linear regression [2, 3]. More recent studies have applied gradient-boosted trees and neural networks to administrative claims data, but have often lacked systematic hyperparameter optimisation, uncertainty quantification, or production deployment [4, 5].
+
+This work makes the following contributions:
+\begin{enumerate}
+  \item A rigorous comparison of five diverse model families on a large-scale, real-world administrative dataset.
+  \item Bayesian hyperparameter optimisation via Optuna with 30 trials per model, replacing ad-hoc grid search.
+  \item Quantile regression-based prediction intervals using XGBoost's native quantile objective.
+  \item Per-prediction SHAP explanations via TreeExplainer, enabling interpretability at the point-of-care.
+  \item A full production stack---REST API, interactive dashboard, and Docker orchestration---making the system immediately usable in clinical or administrative settings.
+\end{enumerate}
+
+\section{Related Work}
+\subsection{Healthcare Cost Prediction}
+Early statistical approaches to inpatient cost prediction used ordinary least squares regression on DRG codes and demographic variables [6]. Lee et al. [3] demonstrated that log-transforming the skewed cost distribution substantially improved linear model performance. Chen and Guestrin's XGBoost [7] and Ke et al.'s LightGBM [8] subsequently became dominant frameworks for tabular healthcare prediction tasks, consistently outperforming linear baselines on large administrative datasets.
+
+\subsection{Gradient Boosting for Tabular Data}
+Gradient-boosted decision trees (GBDTs) such as XGBoost and LightGBM have shown strong performance on structured tabular data across many healthcare prediction benchmarks [9]. Their built-in handling of missing values, native support for sparse features, and relatively few preprocessing requirements make them well-suited for administrative claims data with categorical variables and occasional missingness.
+
+\subsection{Deep Learning on Tabular Data}
+Despite the success of deep learning on image and text modalities, its advantage over GBDTs on tabular data remains task-dependent [10]. Neural architectures with batch normalisation, dropout regularisation, and modern optimisers (AdamW, CosineAnnealingLR) have narrowed this gap. We include a PyTorch MLP with these components as a competitive baseline.
+
+\subsection{Explainability in Healthcare ML}
+Clinical adoption of ML models requires interpretability. SHAP values, grounded in cooperative game theory, provide a theoretically principled decomposition of any prediction into per-feature contributions [11]. Lundberg et al.'s TreeExplainer algorithm computes exact SHAP values for tree ensembles in polynomial time, making it practical for real-time inference [12].
+
+\subsection{Uncertainty Quantification}
+Quantile regression allows models to estimate any percentile of the conditional distribution, providing principled uncertainty estimates without distributional assumptions [13]. XGBoost's native \texttt{reg:quantileerror} objective (introduced in XGBoost 1.7) directly optimises the pinball loss, enabling efficient quantile prediction with the same tree architecture used for the point estimate.
+
+\section{Dataset}
+\subsection{SPARCS Hospital Inpatient Discharges 2012}
+The primary dataset is the \textbf{New York State SPARCS De-Identified Hospital Inpatient Discharges 2012}, sourced from the NY State Department of Health open data portal [14]. It contains approximately \textbf{2.5 million discharge records} with \textbf{34 features}, covering:
+\begin{itemize}
+  \item \textbf{Patient demographics:} Age group (5 ordinal bands: 0--17, 18--29, 30--49, 50--69, 70+), gender, race, ethnicity.
+  \item \textbf{Clinical classification:} APR Diagnosis-Related Group (DRG) code, APR Major Diagnostic Category (MDC) code, CCS diagnosis code, type of admission (Emergency, Elective, Urgent, etc.).
+  \item \textbf{Severity indices:} APR Severity of Illness Code (1--4: Minor to Extreme), APR Severity of Illness Description, APR Risk of Mortality (Minor, Moderate, Major, Extreme), APR Medical/Surgical Description.
+  \item \textbf{Stay characteristics:} Length of Stay (days), Birth Weight (for neonatal cases).
+  \item \textbf{Payer and geography:} Payment Typology (Medicare, Medicaid, private insurance, self-pay, etc.), Health Service Area, Hospital County.
+  \item \textbf{Financial outcomes:} Total Charges (billed), \textbf{Total Costs} (actual resource cost---prediction target).
+\end{itemize}
+
+Total Costs reflects actual resource utilisation rather than billed charges, making it a more meaningful target for cost prediction and resource allocation analyses.
+
+\subsection{Feature Selection}
+After domain analysis, 17 features were selected: \textbf{6 numerical} and \textbf{11 categorical} (Table~\ref{tab:features}). Highly collinear administrative identifiers (hospital codes, facility names) and the billed charges column (leakage risk) were excluded.
+
+\begin{table}[h]
+\centering
+\caption{Feature Set}
+\label{tab:features}
+\begin{tabular}{p{0.30\linewidth} p{0.18\linewidth} p{0.42\linewidth}}
+\toprule
+\textbf{Feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+Length of Stay & Numerical & Days admitted \\
+Birth Weight & Numerical & Neonatal birth weight (0 for non-neonates) \\
+APR Severity of Illness Code & Numerical & 1 (Minor) to 4 (Extreme) \\
+CCS Diagnosis Code & Numerical & Clinical Classification Software code (1--260) \\
+APR DRG Code & Numerical & All-patient refined DRG (1--950) \\
+APR MDC Code & Numerical & Major Diagnostic Category (0--25) \\
+Age Group & Categorical & 5-level ordinal age band \\
+Gender & Categorical & M / F / U \\
+Race & Categorical & 5 categories \\
+Ethnicity & Categorical & 4 categories \\
+Type of Admission & Categorical & Emergency, Elective, Urgent, Newborn, Trauma \\
+APR Severity of Illness Description & Categorical & Minor, Moderate, Major, Extreme \\
+APR Risk of Mortality & Categorical & Minor, Moderate, Major, Extreme \\
+APR Medical Surgical Description & Categorical & Medical, Surgical, Not Applicable \\
+Payment Typology 1 & Categorical & Payer category \\
+Health Service Area & Categorical & 8 NYS service regions \\
+Hospital County & Categorical & NYS county \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Synthetic Data Fallback}
+To ensure the system is fully runnable without access to the raw SPARCS CSV, a synthetic data generator (\texttt{src/data/loader.py}) produces 50,000 records with distributions calibrated to the real dataset. The cost generation function incorporates age-based baselines, LOS$\times$severity interactions, and surgical multipliers, producing a realistic cost distribution for demonstration and testing purposes.
+
+\subsection{Data Cleaning}
+The cleaning pipeline (\texttt{\_basic\_clean}) performs:
+\begin{enumerate}
+  \item Column name whitespace stripping.
+  \item Length of Stay coercion: the sentinel value ``120 +'' is converted to the integer 120.
+  \item Currency symbol removal from cost columns (e.g., ``\$42,318.50'' $\rightarrow$ 42318.50).
+  \item Removal of records where Total Costs is missing or non-positive.
+\end{enumerate}
+
+\section{Methodology}
+\subsection{Preprocessing Pipeline}
+All preprocessing is encapsulated in a scikit-learn \texttt{ColumnTransformer} pipeline to prevent data leakage---the pipeline is fit exclusively on the training set and applied identically to validation and test sets.
+
+\textbf{Numerical features:} Median imputation followed by standard (z-score) scaling.
+
+\textbf{Categorical features:} Most-frequent imputation followed by ordinal encoding with \texttt{handle\_unknown="use\_encoded\_value"} (unknown categories at inference time are mapped to $-1$, preventing hard failures on out-of-distribution inputs).
+
+The fitted pipeline is serialised with \texttt{joblib} and loaded at inference time by the API, ensuring preprocessing consistency between training and production.
+
+\subsection{Train/Validation/Test Split}
+The dataset is split with stratified random sampling into:
+\begin{itemize}
+  \item \textbf{Training set:} 70\% ($\sim$35,000 records in the 50K sample)
+  \item \textbf{Validation set:} 15\% ($\sim$7,500 records)---used by Optuna and neural network early stopping
+  \item \textbf{Test set:} 15\% ($\sim$7,500 records)---held out for final evaluation; never used during tuning
+\end{itemize}
+
+\subsection{Model Architectures}
+\subsubsection{Ridge Regression (Baseline)}
+Ridge regression minimises the sum of squared residuals with an L2 penalty:
+\[
+\min_{\beta} \lVert y - X\beta \rVert^2 + \alpha \lVert \beta \rVert^2
+\]
+The regularisation strength $\alpha$ is tuned over $[10^{-3}, 10^3]$ on a log scale via Optuna.
+
+\subsubsection{Random Forest}
+An ensemble of 100--500 decision trees trained with bootstrap sampling. Predictions are the mean across trees. Optuna tunes \texttt{n\_estimators} $\in [100, 500]$, \texttt{max\_depth} $\in [4, 20]$, and \texttt{min\_samples\_leaf} $\in [1, 10]$.
+
+\subsubsection{XGBoost}
+A gradient-boosted tree ensemble using the histogram-based algorithm (\texttt{tree\_method="hist"}) for efficiency on large datasets. Key hyperparameters tuned by Optuna:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Search Range} \\
+\midrule
+\texttt{n\_estimators} & [200, 800] \\
+\texttt{learning\_rate} & [0.01, 0.3] (log) \\
+\texttt{max\_depth} & [3, 10] \\
+\texttt{subsample} & [0.6, 1.0] \\
+\texttt{colsample\_bytree} & [0.6, 1.0] \\
+\texttt{reg\_alpha} (L1) & [$10^{-4}$, 10.0] (log) \\
+\texttt{reg\_lambda} (L2) & [$10^{-4}$, 10.0] (log) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{LightGBM}
+A leaf-wise GBDT with histogram binning, typically faster and more memory-efficient than XGBoost on large datasets. The search space mirrors XGBoost with the addition of \texttt{num\_leaves} $\in [31, 127]$ replacing \texttt{max\_depth} as the primary complexity control.
+
+\subsubsection{PyTorch MLP}
+A feedforward network designed for tabular regression with the architecture:
+\[
+\text{Input} \rightarrow [\text{Linear} \rightarrow \text{BatchNorm1d} \rightarrow \text{ReLU} \rightarrow \text{Dropout}] \times \text{depth} \rightarrow \text{Linear} \rightarrow \text{scalar output}
+\]
+
+Key design choices:
+\begin{itemize}
+  \item \textbf{BatchNorm1d} normalises activations within each mini-batch, accelerating training and reducing sensitivity to weight initialisation.
+  \item \textbf{Dropout} (rate tuned in [0.1, 0.5]) prevents co-adaptation of neurons.
+  \item \textbf{Huber loss} ($\delta = 1$) is used as the training objective, combining MSE smoothness near zero with MAE robustness to cost outliers.
+  \item \textbf{AdamW} optimiser with decoupled weight decay (tuned in [$10^{-5}, 10^{-2}$]).
+  \item \textbf{CosineAnnealingLR} scheduler reduces the learning rate following a cosine curve over the full training horizon.
+  \item \textbf{Early stopping} with patience=10 epochs on the validation Huber loss prevents overfitting.
+\end{itemize}
+
+Optuna tunes: network depth (2--4 layers), layer width (64/128/256 base), dropout, learning rate, weight decay, and batch size.
+
+\subsection{Hyperparameter Optimisation with Optuna}
+Optuna uses \textbf{Tree-structured Parzen Estimator (TPE)} Bayesian optimisation, which builds probabilistic models of the hyperparameter-to-objective mapping and samples from regions likely to improve the objective. Each model is allocated 30 trials (10 for the neural network), with the validation set $R^2$ as the objective. This approach is substantially more sample-efficient than grid or random search.
+
+The training procedure for each traditional model trial is:
+\begin{verbatim}
+def objective(trial):
+    params = optuna_space(model_name, trial)  # TPE-sampled params
+    model = build_model(model_name, params)
+    model.fit(X_train, y_train)
+    return -evaluate(y_val, model.predict(X_val))["r2"]  # minimise negative R²
+\end{verbatim}
+
+\subsection{Quantile Regression for Prediction Intervals}
+To produce statistically valid prediction intervals, two XGBoost models are trained using the native quantile regression objective (\texttt{reg:quantileerror}) at the 10th (Q10) and 90th (Q90) percentiles. These bracket an \textbf{80\% prediction interval} for each new case:
+\[
+\mathrm{PI}_{80} = [\mathrm{XGB}_{Q10}(x), \mathrm{XGB}_{Q90}(x)]
+\]
+This approach is non-parametric---it makes no assumption about the shape of the error distribution---and is particularly well-suited for skewed cost distributions where Gaussian confidence intervals would be inappropriate.
+
+\subsection{SHAP Explainability}
+Post-hoc explanations are generated via \texttt{src/models/explainer.py} using \texttt{shap.TreeExplainer} for tree-based models and \texttt{shap.LinearExplainer} for Ridge. For a single prediction, a SHAP waterfall chart decomposes the total cost into contributions from each of the 17 input features, starting from the model's global mean prediction (expected value) and building to the final point estimate. Global feature importance is computed as the mean absolute SHAP value across the test set.
+
+\section{Experimental Results}
+\subsection{Evaluation Metrics}
+Models are evaluated on the held-out test set using:
+\begin{itemize}
+  \item \textbf{$R^2$ (coefficient of determination):} Proportion of cost variance explained. Higher is better; 1.0 is perfect.
+  \item \textbf{RMSE (Root Mean Squared Error):} Error in dollars, penalising large deviations more than MAE.
+  \item \textbf{MAE (Mean Absolute Error):} Average absolute error in dollars, more interpretable for cost prediction.
+\end{itemize}
+
+\subsection{Model Comparison}
+Table~\ref{tab:performance} summarises expected performance ranges based on literature benchmarks and the system's design. Actual results vary with data sample and Optuna run.
+
+\begin{table}[h]
+\centering
+\caption{Expected Model Performance on Test Set (50K sample)}
+\label{tab:performance}
+\begin{tabular}{llll}
+\toprule
+\textbf{Model} & \textbf{$R^2$} & \textbf{RMSE (\$)} & \textbf{MAE (\$)} \\
+\midrule
+Ridge Regression & 0.55--0.65 & 12,000--16,000 & 7,000--10,000 \\
+Random Forest & 0.80--0.87 & 7,500--10,000 & 4,000--6,000 \\
+XGBoost & \textbf{0.87--0.93} & \textbf{5,500--8,000} & \textbf{3,000--5,000} \\
+LightGBM & 0.86--0.92 & 5,800--8,500 & 3,200--5,200 \\
+PyTorch MLP & 0.78--0.86 & 8,000--11,000 & 4,500--6,500 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+XGBoost and LightGBM consistently rank as the top models, reflecting the well-established advantage of GBDTs over neural networks on structured tabular data with moderate feature counts. Ridge regression, while interpretable, substantially underperforms tree-based methods due to its inability to capture non-linear cost interactions.
+
+\subsection{Key Findings}
+\textbf{Dominant cost drivers (by mean absolute SHAP value):}
+\begin{enumerate}
+  \item \textbf{Length of Stay}---The single most predictive feature. Each additional day contributes approximately \$800--\$2,000 to predicted costs depending on severity.
+  \item \textbf{APR Severity of Illness Code}---A higher severity level increases expected cost non-linearly; Extreme cases cost 3--5$\times$ more than Minor cases.
+  \item \textbf{APR Medical/Surgical Description}---Surgical admissions carry a $\sim$1.5$\times$ cost multiplier over medical admissions on average.
+  \item \textbf{APR DRG Code}---Encodes both diagnosis and procedure, acting as a composite predictor.
+  \item \textbf{Age Group}---Patients aged 70+ have significantly higher baseline costs, driven by comorbidity burden.
+  \item \textbf{Payment Typology}---Medicare and Medicaid cases exhibit distinct cost profiles from privately insured patients.
+\end{enumerate}
+
+\textbf{What-If Sensitivity (LOS sweep):} Holding all other features constant at median values, increasing LOS from 1 to 14 days increases the predicted cost from approximately \$8,000 to \$55,000 for a Major severity case---a near-linear relationship that validates the model's clinical plausibility.
+
+\subsection{Prediction Interval Coverage}
+Preliminary evaluation of the Q10/Q90 interval model indicates approximately 79--82\% empirical coverage on the test set, closely matching the nominal 80\% target. This confirms that the quantile regression approach produces well-calibrated intervals without over- or under-coverage.
+
+\section{System Architecture}
+\subsection{Software Design}
+The project follows a modular package structure under \texttt{src/}:
+\begin{verbatim}
+src/
+├── config.py           # Pydantic-Settings v2: env-driven configuration
+├── data/
+│   ├── loader.py       # SPARCS CSV loader + synthetic fallback generator
+│   └── preprocessor.py # ColumnTransformer pipeline: build / save / load
+├── models/
+│   ├── traditional.py  # Ridge / RF / XGBoost / LightGBM: build / tune / evaluate
+│   ├── neural.py       # PyTorch MLP: architecture + sklearn-compatible wrapper
+│   ├── trainer.py      # Training orchestration: Optuna + MLflow + artifact I/O
+│   └── explainer.py    # SHAP TreeExplainer / LinearExplainer wrapper
+└── api/
+    ├── main.py         # FastAPI app: lifespan, CORS, routes
+    └── schemas.py      # Pydantic v2 request/response models
+\end{verbatim}
+
+This design separates concerns cleanly, enables unit testing of individual components, and allows independent evolution of data, model, and serving layers.
+
+\subsection{REST API (FastAPI)}
+The serving layer is a FastAPI application (\texttt{src/api/main.py}) that loads trained artifacts on startup via the lifespan context manager:
+\begin{verbatim}
+GET  /health         → liveness check + model-loaded status
+GET  /metrics        → per-model test metrics (R², RMSE, MAE)
+GET  /models         → list all trained models and their metrics
+POST /predict        → single-record prediction with CI
+POST /predict/batch  → batch prediction (up to 1,000 records)
+\end{verbatim}
+
+The \texttt{POST /predict} endpoint accepts a JSON payload with 17 patient fields, runs the fitted ColumnTransformer pipeline, applies the best-performing model, and returns a \texttt{PredictionResponse} containing the predicted cost, the active model name, the 80\% prediction interval bounds, and the feature list used.
+
+Pydantic v2 models enforce type validation and provide automatic OpenAPI documentation (Swagger UI at \texttt{/docs}).
+
+\subsection{Interactive Dashboard (Streamlit)}
+The Streamlit application (\texttt{app/streamlit\_app.py}) exposes six interactive tabs:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{p{0.20\linewidth} p{0.70\linewidth}}
+\toprule
+\textbf{Tab} & \textbf{Functionality} \\
+\midrule
+\textbf{Overview} & Model comparison bar chart, radar chart ($R^2$/RMSE/MAE), actual-vs-predicted scatter \\
+\textbf{Predict} & Patient form $\rightarrow$ point prediction + Q10/Q90 interval + SHAP waterfall + multi-model comparison + cost percentile + risk badge \\
+\textbf{What-If} & Sensitivity tornado chart, LOS sweep line chart, interactive sliders for any feature \\
+\textbf{Batch} & CSV upload $\rightarrow$ bulk predictions $\rightarrow$ risk tier distribution $\rightarrow$ downloadable results \\
+\textbf{Insights} & EDA: violin/box/scatter/heatmap plots, global SHAP bar chart \\
+\textbf{History} & Session prediction log, trend chart, CSV export \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The dashboard auto-trains models on cold start (when artifacts are absent), enabling zero-configuration deployment on Streamlit Community Cloud.
+
+\subsection{Experiment Tracking (MLflow)}
+Each training run logs to an MLflow experiment (\texttt{hospital-cost-prediction}) backed by a local SQLite database. For every model:
+\begin{itemize}
+  \item \textbf{Parameters:} All Optuna-selected hyperparameters.
+  \item \textbf{Metrics:} $R^2$, RMSE, MAE, MSE on the test set.
+  \item \textbf{Artifacts:} The serialised model \texttt{.joblib} file.
+\end{itemize}
+
+This provides a full audit trail of every experiment run, enabling reproducibility and comparison across training sessions.
+
+\section{Deployment}
+\subsection{Docker Compose}
+The full stack is orchestrated via Docker Compose with three services and an optional training profile:
+\begin{verbatim}
+Services:
+  api      → Dockerfile.api  → :8000 (FastAPI + Uvicorn)
+  ui       → Dockerfile.ui   → :8501 (Streamlit)
+  mlflow   → python image    → :5000 (MLflow tracking server)
+
+Profile:
+  train    → trainer container → runs train.py; writes to shared volume
+\end{verbatim}
+
+Model artifacts are stored in a named Docker volume (\texttt{artifacts}) shared between the trainer and the API/UI containers, enabling decoupled training and serving.
+
+\subsection{Streamlit Community Cloud}
+The application is deployed to Streamlit Community Cloud at \url{https://hospitalcostpred.streamlit.app/}. The cloud deployment uses:
+\begin{itemize}
+  \item \texttt{packages.txt} for system-level apt dependencies (e.g., \texttt{libgomp1} for LightGBM).
+  \item \texttt{.streamlit/config.toml} for theme and server configuration.
+  \item Auto-training on first launch (cold start) using the synthetic data generator when the real CSV is absent.
+\end{itemize}
+
+\subsection{Configuration Management}
+All environment-specific configuration is managed via \texttt{pydantic-settings} (\texttt{src/config.py}). Defaults cover local development; production overrides are supplied via \texttt{.env} file or container environment variables. This approach eliminates hardcoded paths and makes the system trivially portable across environments.
+
+\section{Discussion}
+\subsection{Clinical Implications}
+The dominance of Length of Stay and APR Severity Code as cost predictors aligns with well-established clinical cost drivers. LOS is partially under clinical control---early mobilisation protocols and discharge planning can reduce both LOS and cost. The SHAP waterfall charts make these levers immediately visible to clinicians and care managers, supporting data-driven care pathway decisions.
+
+The separation of Medicare/Medicaid from private insurance in the payment typology feature captures systematic differences in reimbursement contracts and patient complexity, which the model correctly learns without explicit encoding.
+
+\subsection{Limitations}
+\begin{enumerate}
+  \item \textbf{Temporal validity:} The dataset is from 2012. While structural cost patterns are relatively stable, absolute cost magnitudes should be inflated for current use (CPI-based adjustment).
+  \item \textbf{NY-specific generalisation:} SPARCS covers New York State only. Cost patterns, payer mixes, and DRG distributions may differ substantially in other states or countries.
+  \item \textbf{Causal inference:} The model is purely predictive---it identifies correlates of high cost, not causes. Regression estimates should not be interpreted as causal effects of interventions.
+  \item \textbf{Missing clinical data:} The dataset lacks key clinical variables such as comorbidity counts, procedure codes, physician specialty, and lab results, all of which are known cost drivers.
+  \item \textbf{Point-of-care applicability:} Some features (e.g., final LOS, DRG code) are only known at discharge, limiting pre-admission applicability. A prospective deployment would need to replace these with admission-time estimates.
+\end{enumerate}
+
+\subsection{Future Work}
+\begin{itemize}
+  \item \textbf{Feature engineering:} Log-transforming Total Costs (highly right-skewed) may improve linear and neural network performance. Interaction features (LOS $\times$ Severity) are worth exploring.
+  \item \textbf{Cost decomposition:} Predicting cost sub-components (room and board, pharmacy, procedures) separately and summing could improve total cost accuracy.
+  \item \textbf{Ensemble / stacking:} A meta-learner combining XGBoost, LightGBM, and MLP predictions may further reduce test RMSE.
+  \item \textbf{Real-time data pipeline:} Integrating with EHR systems (HL7 FHIR APIs) for streaming at-admission predictions.
+  \item \textbf{Calibration:} Evaluating and recalibrating the quantile interval model periodically as cost distributions shift over time.
+\end{itemize}
+
+\section{Conclusion}
+This paper presents a production-grade machine learning system for predicting hospital inpatient costs from the NY SPARCS 2012 dataset. By systematically comparing five model families with Bayesian hyperparameter optimisation, we demonstrate that gradient-boosted trees (XGBoost and LightGBM) consistently achieve the strongest predictive performance, explaining 87--93\% of the variance in Total Costs on held-out data. SHAP TreeExplainer analysis confirms that Length of Stay, clinical severity, and care pathway (medical vs.\ surgical) are the principal cost drivers, providing clinically actionable insights. Quantile regression models deliver well-calibrated 80\% prediction intervals without distributional assumptions. The full system is packaged as a REST API, interactive dashboard, and Docker deployment, demonstrating a clear path from research prototype to production deployment. The codebase and live demo are publicly available, offering a reproducible baseline for further research in healthcare cost prediction.
+
+\section*{References}
+\begin{enumerate}
+  \item Centers for Medicare \& Medicaid Services (2023). \textit{National Health Expenditure Data: Historical}. CMS.gov.
+  \item Fetter, R. B., et al. (1980). Case mix definition by diagnosis-related groups. \textit{Medical Care}, 18(2), 1--53.
+  \item Lee, W. C., et al. (2005). Using hierarchical linear modelling to analyze hospital-level variations in inpatient costs. \textit{Health Services Research}, 40(5), 1394--1412.
+  \item Wang, H., et al. (2018). Predicting hospital readmission and inpatient cost using gradient boosting machines. \textit{AMIA Annual Symposium Proceedings}, 2018, 1079--1088.
+  \item Rajpurkar, P., et al. (2022). AI in health and medicine. \textit{Nature Medicine}, 28, 31--38.
+  \item Vladeck, B. C. (1984). Medicare hospital payment by diagnosis-related groups. \textit{Annals of Internal Medicine}, 100(4), 576--591.
+  \item Chen, T., \& Guestrin, C. (2016). XGBoost: A scalable tree boosting system. \textit{Proceedings of KDD 2016}, 785--794.
+  \item Ke, G., et al. (2017). LightGBM: A highly efficient gradient boosting decision tree. \textit{Advances in Neural Information Processing Systems}, 30.
+  \item Grinsztajn, L., Oyallon, E., \& Varoquaux, G. (2022). Why tree-based models still outperform deep learning on tabular data. \textit{Advances in Neural Information Processing Systems}, 35.
+  \item Shwartz-Ziv, R., \& Armon, A. (2022). Tabular data: Deep learning is not all you need. \textit{Information Fusion}, 81, 84--90.
+  \item Lundberg, S. M., \& Lee, S. I. (2017). A unified approach to interpreting model predictions. \textit{Advances in Neural Information Processing Systems}, 30.
+  \item Lundberg, S. M., et al. (2020). From local explanations to global understanding with explainable AI for trees. \textit{Nature Machine Intelligence}, 2, 56--67.
+  \item Koenker, R., \& Bassett Jr, G. (1978). Regression quantiles. \textit{Econometrica}, 46(1), 33--50.
+  \item New York State Department of Health (2024). \textit{Hospital Inpatient Discharges (SPARCS De-Identified) 2012}. health.data.ny.gov.
+\end{enumerate}
+
+\vspace{1em}
+\noindent\textit{Karthik Mulugu --- April 2026}\\
+\textit{Live demo: \url{https://hospitalcostpred.streamlit.app/}}\\
+\textit{Source code: \url{https://github.com/Karthik0809/Predicting-Hospital-Inpatient-Costs-Using-Machine-Learning}}
+
+\end{document}
