@@ -1,6 +1,6 @@
 # Hospital Inpatient Cost Predictor v2
 
-Predicts total hospital inpatient costs from patient demographics and clinical data.
+Predicts total hospital inpatient costs from patient demographics and clinical data on **2.5M real SPARCS discharge records** — best model (Random Forest) reaches **R² = 0.823, RMSE = $3,454**.
 Rebuilt with a modern ML stack, REST API, interactive dashboard, and full Docker deployment.
 
 ---
@@ -8,6 +8,46 @@ Rebuilt with a modern ML stack, REST API, interactive dashboard, and full Docker
 ## Live App
 
 - Streamlit: https://hospitalcostpred.streamlit.app/
+
+---
+
+## Model Performance
+
+Trained and evaluated on the real NY SPARCS 2012 dataset (2.5M records, 80/20 split):
+
+| Model | RMSE | R² |
+|---|---:|---:|
+| **Random Forest** | **$3,454** | **0.823** |
+| PyTorch MLP (BatchNorm + Dropout) | MAE $2,279 | 0.762 |
+| Gradient Boosting | $4,349 | 0.719 |
+| Linear Regression | $4,485 | 0.701 |
+
+Random Forest cuts RMSE by **23% vs the linear baseline** ($3,454 vs $4,485). Full training logs and per-epoch curves are in [`hospital_cost_prediction.ipynb`](hospital_cost_prediction.ipynb); the v2 pipeline reproduces this with Optuna tuning + MLflow tracking (`python train.py`).
+
+---
+
+## What Drives Inpatient Costs
+
+Computed across all 2.5M records via the [NY Open Health Data API](https://health.data.ny.gov/resource/u4ud-w55t.json) (reproducible SoQL queries below):
+
+| Driver | Finding |
+|---|---|
+| **Illness severity** | Extreme-severity stays average **$40,415 vs $6,665 for Minor — a 6.1× spread**, the single strongest cost driver |
+| **Diagnosis group** | Multiple Significant Trauma is the costliest MDC at **$35,558/stay**; blood/lymphatic malignancies ($27,430) and HIV ($25,101) follow |
+| **Age band** | Costs peak at ages **50–69 ($14,879/stay)** — about **2× pediatric stays** ($7,542) |
+| **Admission type** | Trauma admissions cost **1.55× emergency admissions** ($18,982 vs $12,224); newborn stays are cheapest ($4,942) |
+
+```sql
+-- severity spread (6.1x)
+SELECT apr_severity_of_illness_description, avg(total_costs), count(*)
+GROUP BY apr_severity_of_illness_description
+
+-- costliest diagnosis groups
+SELECT apr_mdc_description, avg(total_costs), count(*)
+GROUP BY apr_mdc_description ORDER BY avg_total_costs DESC
+```
+
+The takeaway: clinical acuity (severity, diagnosis group) drives cost far more than demographics — an Extreme-severity stay costs more than 5 average Minor-severity stays combined.
 
 ---
 
