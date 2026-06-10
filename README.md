@@ -13,16 +13,19 @@ Rebuilt with a modern ML stack, REST API, interactive dashboard, and full Docker
 
 ## Model Performance
 
-Trained and evaluated on the real NY SPARCS 2012 dataset (2.5M records, 80/20 split):
+**v2 pipeline** — trained on a 150K-row spaced sample of real SPARCS data (committed in `data/`, 70/15/15 split, 18 features):
 
-| Model | RMSE | R² |
-|---|---:|---:|
-| **Random Forest** | **$3,454** | **0.823** |
-| PyTorch MLP (BatchNorm + Dropout) | MAE $2,279 | 0.762 |
-| Gradient Boosting | $4,349 | 0.719 |
-| Linear Regression | $4,485 | 0.701 |
+| Model | R² | RMSE | MAE |
+|---|---:|---:|---:|
+| **LightGBM** | **0.876** | **$7,335** | **$3,234** |
+| XGBoost | 0.866 | $7,614 | $3,320 |
+| Random Forest | 0.861 | $7,753 | $3,358 |
+| PyTorch MLP (BatchNorm + Dropout) | 0.856 | $7,896 | $3,726 |
+| Ridge (linear baseline) | 0.726 | $10,890 | $5,745 |
 
-Random Forest cuts RMSE by **23% vs the linear baseline** ($3,454 vs $4,485). Full training logs and per-epoch curves are in [`hospital_cost_prediction.ipynb`](hospital_cost_prediction.ipynb); the v2 pipeline reproduces this with Optuna tuning + MLflow tracking (`python train.py`).
+LightGBM cuts RMSE by **33% vs the linear baseline**. The live Streamlit app trains on this same real-data sample at startup, so the metrics shown there match this table. Reproduce: `python train.py` (add `--no-optuna` to skip the hyperparameter search).
+
+**v1 notebook** — trained on the full 2.5M records with a smaller feature set ([`hospital_cost_prediction.ipynb`](hospital_cost_prediction.ipynb)): Random Forest R² 0.823 / RMSE $3,454, PyTorch NN R² 0.762. (RMSE values differ between v1/v2 because the notebook filtered the cost distribution differently — R² is the comparable metric.)
 
 ---
 

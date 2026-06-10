@@ -80,6 +80,14 @@ class NeuralNetRegressor:
         input_dim = X_train.shape[1]
         self.model_ = MLP(input_dim, list(self.hidden_dims), self.dropout).to(dev)
 
+        # Standardise the target: raw dollar costs (~$12K mean) with Huber loss
+        # produce clipped gradients and the net never reaches the target scale.
+        self.y_mean_ = float(np.mean(y_train))
+        self.y_std_ = float(np.std(y_train)) or 1.0
+        y_train = (np.asarray(y_train, dtype=np.float64) - self.y_mean_) / self.y_std_
+        if y_val is not None:
+            y_val = (np.asarray(y_val, dtype=np.float64) - self.y_mean_) / self.y_std_
+
         train_loader = self._make_loader(X_train, y_train, shuffle=True)
         val_loader = self._make_loader(X_val, y_val) if X_val is not None else None
 
@@ -134,7 +142,9 @@ class NeuralNetRegressor:
         with torch.no_grad():
             for (xb,) in loader:
                 preds.append(self.model_(xb.to(dev)).cpu().numpy())
-        return np.concatenate(preds)
+        out = np.concatenate(preds)
+        # Inverse-transform back to dollars
+        return out * getattr(self, "y_std_", 1.0) + getattr(self, "y_mean_", 0.0)
 
     # ── internals ────────────────────────────────────────────────────────────
 

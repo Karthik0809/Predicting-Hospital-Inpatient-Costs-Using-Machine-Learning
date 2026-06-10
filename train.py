@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Entry-point for training the hospital cost prediction models."""
 
+import torch  # noqa: F401  (import torch first on Windows: optree DLL loading order)
+
 import argparse
 import logging
 import sys
